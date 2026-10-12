@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import html
-import os
 from pathlib import Path
 
 import pandas as pd
@@ -10,18 +9,7 @@ import streamlit as st
 from analyzer import analyze_resume, extract_resume_text, load_training_data, train_classifier
 
 
-DEFAULT_CSV_PATH = Path(
-    os.environ.get(
-        "RESUME_DATASET_PATH",
-        r"C:\Users\radhi\Downloads\Mobile Devices\archive\Resume\Resume.csv",
-    )
-)
-DEFAULT_PDF_PATH = Path(
-    os.environ.get(
-        "RESUME_PDF_DATASET_PATH",
-        r"C:\Users\radhi\Downloads\Mobile Devices\archive\data\data",
-    )
-)
+TRAINING_CSV_PATH = Path(__file__).resolve().parent / "data" / "Resume.csv"
 MAX_RESUME_BYTES = 20 * 1024 * 1024
 
 st.set_page_config(
@@ -204,12 +192,8 @@ st.markdown(
 
 
 @st.cache_resource(show_spinner=False)
-def load_model(csv_path: str, pdf_path: str, csv_bytes: bytes | None = None):
-    training_data, data_stats = load_training_data(
-        csv_path or None,
-        pdf_path or None,
-        csv_bytes=csv_bytes,
-    )
+def load_model():
+    training_data, data_stats = load_training_data(TRAINING_CSV_PATH)
     model = train_classifier(training_data)
     return model, data_stats
 
@@ -226,54 +210,28 @@ st.markdown(
 )
 
 with st.sidebar:
-    st.markdown("## Your dataset")
-    csv_path = st.text_input("Local labeled resume CSV", str(DEFAULT_CSV_PATH))
-    uploaded_dataset = st.file_uploader(
-        "Or upload the labeled CSV",
-        type=["csv"],
-        max_upload_size=100,
-        help="Required on Streamlit Cloud. The CSV must include Resume_str and Category columns.",
-    )
-    include_pdfs = st.checkbox(
-        "Include category PDF corpus",
-        value=False,
-        help="Reading and extracting text from every PDF can add several minutes to the initial setup.",
-    )
-    pdf_path = ""
-    if include_pdfs:
-        pdf_path = st.text_input("Category PDF folder", str(DEFAULT_PDF_PATH))
+    st.markdown("## Training dataset")
     st.caption(
-        "On Streamlit Cloud, upload the labeled CSV here; it is sent to the app host for training. "
-        "Do not commit resume datasets to GitHub. PDF training remains optional because extracting "
-        "every file can take several minutes."
+        "The labeled resume dataset is bundled with this app. You do not need to upload it. "
+        "The raw CSV is stored in the public GitHub repository."
     )
     st.markdown("---")
     st.markdown("**Next: analyze a resume**")
     st.caption(
-        "After the training CSV loads, open the Analyze a resume tab in the main panel. "
-        "Its resume uploader accepts PDF, TXT, and DOCX files."
+        "Open the Analyze a resume tab in the main panel to upload a PDF, TXT, or DOCX resume."
     )
 
-dataset_bytes = uploaded_dataset.getvalue() if uploaded_dataset is not None else None
-local_csv_path = csv_path.strip()
-if dataset_bytes is None and not Path(local_csv_path).expanduser().is_file():
-    st.info(
-        "**First, add the labeled training dataset:** upload the archive's CSV in the sidebar. "
-        "That CSV trains the career-category model. After it loads, use the resume uploader "
-        "here in the main panel to analyze an individual PDF, TXT, or DOCX resume."
-    )
+if not TRAINING_CSV_PATH.is_file():
+    st.error(f"The bundled training dataset is missing: {TRAINING_CSV_PATH.name}")
+    st.info("Re-deploy the app from GitHub so the bundled dataset is included.")
     st.stop()
 
 try:
-    with st.spinner("Learning from your resume dataset..."):
-        model, data_stats = load_model(
-            local_csv_path if dataset_bytes is None else "",
-            pdf_path.strip(),
-            dataset_bytes,
-        )
+    with st.spinner("Learning from the bundled resume dataset..."):
+        model, data_stats = load_model()
 except (OSError, ValueError, pd.errors.ParserError) as error:
-    st.error(f"Could not load the selected resume dataset: {error}")
-    st.info("Upload a valid CSV with Resume_str and Category columns, or check the local CSV path.")
+    st.error(f"Could not load the bundled resume dataset: {error}")
+    st.info("The bundled CSV must include Resume_str and Category columns.")
     st.stop()
 
 st.markdown(
@@ -445,16 +403,15 @@ with analyze_tab:
 with dataset_tab:
     st.markdown("### What the analyzer learns from")
     st.write(
-        "The model trains on labeled `Resume_str` text from the CSV. Enable the optional PDF "
-        "corpus in the sidebar to also include readable PDFs in category-named folders. It uses "
-        "TF-IDF text features and logistic regression to rank the job categories in the selected data."
+        "The model trains on labeled `Resume_str` text from the CSV bundled with this app. "
+        "It uses TF-IDF text features and logistic regression to rank the job categories in the dataset."
     )
     stats_columns = st.columns(3)
     stats_columns[0].metric("CSV resumes", f"{data_stats['csv_resumes']:,}")
     stats_columns[1].metric("Readable PDF resumes", f"{data_stats['pdf_resumes']:,}")
     stats_columns[2].metric("Job categories", f"{data_stats['categories']:,}")
     st.info(
-        "All model fitting and resume analysis run locally in this app. This is a dataset-based "
-        "text classifier, not a generative AI service, and results depend on the coverage and "
-        "quality of the provided training data."
+        "The app runs a dataset-based text classifier, not a generative AI service. The bundled "
+        "training CSV is publicly available in the GitHub repository; uploaded resumes are processed "
+        "by the Streamlit-hosted app. Results depend on the coverage and quality of the training data."
     )

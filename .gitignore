@@ -10,5 +10,6 @@ __pycache__/
 *.pdf
 *.docx
 archive/
-data/
 Resume/
+data/*
+!data/Resume.csv

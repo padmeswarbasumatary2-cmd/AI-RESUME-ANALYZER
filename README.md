@@ -1,8 +1,8 @@
 # ResumeLens AI
 
-A local resume analyzer trained on the supplied resume datasets. It predicts likely
-job categories from the labeled CSV and category-folder PDFs, and can compare an
-uploaded resume with a job description.
+A Streamlit resume analyzer trained on the labeled CSV bundled in `data/Resume.csv`.
+It predicts likely job categories and compares an uploaded resume with a job
+description.
 
 ## Run locally on Windows
 
@@ -15,47 +15,34 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The app opens in your browser and uses the CSV from the provided archive:
-
-- `C:\Users\radhi\Downloads\Mobile Devices\archive\Resume\Resume.csv`
-
-The app sidebar can optionally include the PDF corpus from
-`C:\Users\radhi\Downloads\Mobile Devices\archive\data\data`. Reading and extracting
-all PDFs can take several minutes, so this option is off by default. Change the CSV
-or PDF path in the sidebar, or set `RESUME_DATASET_PATH` and
-`RESUME_PDF_DATASET_PATH` before launching Streamlit to use a different copy. The CSV
-needs `Resume_str` and `Category` columns. The PDF folder should contain one
-category-named subfolder per job family.
+The model trains from the included `data/Resume.csv` automatically when the app
+starts. It expects the `Resume_str` and `Category` columns.
 
 ## Deploy on Streamlit Community Cloud
 
-1. Push this project to a GitHub repository. Do **not** add the resume CSV, PDF
-   corpus, or other personal resume data to GitHub; `.gitignore` excludes common
-   dataset files and local environment files.
+1. Push this project to GitHub. This setup includes `data/Resume.csv` in the
+   repository so the app no longer needs a training-CSV upload.
 2. In Streamlit Community Cloud, create an app from that repository, select
    `app.py` as the main file, and deploy.
-3. Open the deployed app and upload the labeled CSV in the **Your dataset** sidebar.
-   It must include `Resume_str` and `Category` columns. The app trains from that
-   upload for the session; re-upload it if the app restarts.
+3. The app trains automatically from the bundled CSV. Upload only the individual
+   PDF, TXT, or DOCX resume that you want to analyze.
 
-The deployed app cannot read files from your computer's `C:\...` paths. Uploading
-the training CSV sends it to the Streamlit-hosted app for analysis. Uploaded
-training data is not committed to GitHub by this workflow. Only deploy resume
-datasets to a Streamlit app whose access and data handling you are comfortable
-with.
+**Privacy warning:** the raw training CSV contains real resumes and is committed
+to this public GitHub repository. Anyone may download it. The source resume PDF
+corpus is not included. Uploaded resumes are processed by Streamlit Cloud when the
+hosted app is used.
 
 ## What it does
 
-- Trains a TF-IDF + logistic-regression classifier on labeled resume text.
+- Trains a TF-IDF + logistic-regression classifier on the bundled labeled resume text.
 - The resume-analysis uploader accepts PDF, TXT, and DOCX resumes. Text extraction
   also supports other document formats internally, but those are not currently
   selectable in the app. OCR is enabled for scanned PDFs.
 - Ranks the three best-fitting dataset categories.
 - Optionally estimates job-description alignment from text similarity and recognized
   skill coverage, and highlights missing skills and keywords.
-- When run locally, analyzes uploaded resumes on your computer. On Streamlit Cloud,
-  uploaded resumes and training data are sent to the Streamlit app host for analysis;
-  they are not sent to a separate AI service by this app.
+- On Streamlit Cloud, uploaded resumes are sent to the Streamlit app host for
+  analysis; they are not sent to a separate AI service by this app.
 
 The category prediction and match score are informational heuristics, not hiring
 recommendations or a measure of candidate quality. On Streamlit Cloud, `packages.txt`
