@@ -248,8 +248,11 @@ with st.sidebar:
         "every file can take several minutes."
     )
     st.markdown("---")
-    st.markdown("**Resume file formats**")
-    st.caption("PDF, Word, OpenDocument, RTF, text, HTML, spreadsheets, images · 20 MB maximum")
+    st.markdown("**Next: analyze a resume**")
+    st.caption(
+        "After the training CSV loads, open the Analyze a resume tab in the main panel. "
+        "Its resume uploader accepts PDF, TXT, and DOCX files."
+    )
 
 dataset_bytes = uploaded_dataset.getvalue() if uploaded_dataset is not None else None
 local_csv_path = csv_path.strip()
