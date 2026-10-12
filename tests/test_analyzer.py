@@ -6,6 +6,7 @@ from zipfile import ZipFile
 
 import pandas as pd
 import pymupdf
+from docx import Document
 from openpyxl import Workbook
 
 from analyzer import (
@@ -136,6 +137,17 @@ class AnalyzerTests(unittest.TestCase):
     def test_invalid_docx_is_reported_as_a_readable_error(self):
         with self.assertRaisesRegex(ValueError, "DOCX file could not be read"):
             extract_resume_text("resume.docx", b"not a document")
+
+    def test_docx_resume_extraction(self):
+        document = Document()
+        document.add_paragraph("Python developer with SQL experience")
+        content = BytesIO()
+        document.save(content)
+
+        text = extract_resume_text("resume.docx", content.getvalue())
+
+        self.assertIn("Python developer", text)
+        self.assertIn("SQL experience", text)
 
     def test_csv_loader_uses_labeled_resume_text(self):
         with tempfile.TemporaryDirectory() as directory:

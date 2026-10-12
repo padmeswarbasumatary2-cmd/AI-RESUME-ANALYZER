@@ -254,7 +254,11 @@ with st.sidebar:
 dataset_bytes = uploaded_dataset.getvalue() if uploaded_dataset is not None else None
 local_csv_path = csv_path.strip()
 if dataset_bytes is None and not Path(local_csv_path).expanduser().is_file():
-    st.info("Upload the labeled resume CSV in the sidebar to train the analyzer.")
+    st.info(
+        "**First, add the labeled training dataset:** upload the archive's CSV in the sidebar. "
+        "That CSV trains the career-category model. After it loads, use the resume uploader "
+        "here in the main panel to analyze an individual PDF, TXT, or DOCX resume."
+    )
     st.stop()
 
 try:
@@ -296,18 +300,17 @@ with analyze_tab:
     with st.form("resume_analysis"):
         upload_column, job_column = st.columns([0.9, 1.1], gap="large")
         with upload_column:
-            st.markdown("#### 1. Add your resume")
+            st.markdown("#### 1. Upload a resume")
             uploaded_resume = st.file_uploader(
-                "Choose any file",
+                "PDF, TXT, or DOCX resume",
+                type=["pdf", "txt", "docx"],
                 max_upload_size=20,
                 help=(
-                    "PDF, DOC/DOCX, ODT, RTF, text, HTML, spreadsheets, or images. "
-                    "Scanned documents and image resumes are analyzed with OCR."
+                    "This is for an individual resume to analyze. The labeled CSV in the sidebar "
+                    "is the separate training dataset."
                 ),
             )
-            st.caption(
-                "PDF · Word · OpenDocument · RTF · text · HTML · spreadsheets · images · up to 20 MB"
-            )
+            st.caption("Accepted: PDF, TXT, DOCX · up to 20 MB")
         with job_column:
             st.markdown("#### 2. Add a target role")
             job_description = st.text_area(
