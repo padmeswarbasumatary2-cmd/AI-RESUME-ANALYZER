@@ -5,6 +5,8 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import pandas as pd
+import pymupdf
+from openpyxl import Workbook
 
 from analyzer import (
     analyze_resume,
@@ -74,6 +76,18 @@ class AnalyzerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "No readable text"):
             extract_resume_text("empty.txt", b" \n ")
 
+    def test_text_pdf_resume_extraction(self):
+        document = pymupdf.open()
+        page = document.new_page()
+        page.insert_text((72, 72), "Python developer with SQL experience")
+        pdf_content = document.tobytes()
+        document.close()
+
+        text = extract_resume_text("resume.pdf", pdf_content)
+
+        self.assertIn("Python developer", text)
+        self.assertIn("SQL experience", text)
+
     def test_rtf_resume_extraction(self):
         text = extract_resume_text("resume.rtf", br"{\rtf1\ansi Python developer}")
 
@@ -101,6 +115,18 @@ class AnalyzerTests(unittest.TestCase):
         text = extract_resume_text("resume.odt", odt.getvalue())
 
         self.assertIn("Python Developer", text)
+        self.assertIn("SQL analyst", text)
+
+    def test_xlsx_resume_extraction(self):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.append(["Python developer", "SQL analyst"])
+        content = BytesIO()
+        workbook.save(content)
+
+        text = extract_resume_text("resume.xlsx", content.getvalue())
+
+        self.assertIn("Python developer", text)
         self.assertIn("SQL analyst", text)
 
     def test_unsupported_format_has_actionable_error(self):
