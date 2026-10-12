@@ -47,7 +47,9 @@ with.
 ## What it does
 
 - Trains a TF-IDF + logistic-regression classifier on labeled resume text.
-- Extracts text from PDF, DOCX, and TXT uploads.
+- Extracts text from PDF, Word (`.doc`/`.docx`), OpenDocument (`.odt`), RTF, TXT,
+  Markdown, HTML, CSV/JSON, Excel spreadsheets, and common image formats. OCR is
+  enabled for images and scanned PDFs.
 - Ranks the three best-fitting dataset categories.
 - Optionally estimates job-description alignment from text similarity and recognized
   skill coverage, and highlights missing skills and keywords.
@@ -56,8 +58,11 @@ with.
   they are not sent to a separate AI service by this app.
 
 The category prediction and match score are informational heuristics, not hiring
-recommendations or a measure of candidate quality. Scanned PDFs require OCR before
-their text can be analyzed.
+recommendations or a measure of candidate quality. The uploader accepts any
+extension, but text extraction is supported for the formats listed above; convert
+other formats to PDF or DOCX first. On Streamlit Cloud, `packages.txt` installs
+Tesseract OCR and Antiword for scanned files and legacy `.doc` documents. Local
+OCR and `.doc` conversion require Tesseract and Antiword to be installed separately.
 
 ## Tests
 

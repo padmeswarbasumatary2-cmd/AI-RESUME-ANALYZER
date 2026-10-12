@@ -3,18 +3,26 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import tempfile
 from io import BytesIO
 from pathlib import Path
-from zipfile import BadZipFile
+from xml.etree import ElementTree
+from zipfile import BadZipFile, ZipFile
 
 import pandas as pd
 from docx import Document
+from html.parser import HTMLParser
+from PIL import Image, UnidentifiedImageError
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
+import pymupdf
+import pytesseract
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import SGDClassifier
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.pipeline import Pipeline
+from striprtf.striprtf import rtf_to_text
 
 
 SKILL_ALIASES: dict[str, tuple[str, ...]] = {
@@ -171,31 +179,138 @@ def train_classifier(training_data: pd.DataFrame) -> Pipeline:
     return model
 
 
+class _VisibleHTMLText(HTMLParser):
+    """Collect visible text from HTML while ignoring script and style contents."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._ignored_tags: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() in {"script", "style"}:
+            self._ignored_tags.append(tag.lower())
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._ignored_tags and tag.lower() == self._ignored_tags[-1]:
+            self._ignored_tags.pop()
+
+    def handle_data(self, data: str) -> None:
+        if not self._ignored_tags:
+            self.parts.append(data)
+
+
+def _extract_ocr_image(image: Image.Image, filename: str) -> str:
+    try:
+        return pytesseract.image_to_string(image)
+    except pytesseract.TesseractNotFoundError as error:
+        raise ValueError(
+            f"OCR is not available for {filename}. Try uploading a text-based PDF or DOCX instead."
+        ) from error
+
+
+def _extract_doc_text(content: bytes) -> str:
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".doc") as temporary_file:
+            temporary_file.write(content)
+            temporary_file.flush()
+            result = subprocess.run(
+                ["antiword", temporary_file.name],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+    except FileNotFoundError as error:
+        raise ValueError(
+            "Legacy .doc files need a converter. Save the resume as .docx or PDF and upload it again."
+        ) from error
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise ValueError("The .doc file could not be converted. Try saving it as .docx or PDF.") from error
+    return result.stdout.decode("utf-8", errors="replace")
+
+
 def extract_resume_text(filename: str, content: bytes) -> str:
-    """Extract text from supported upload formats without storing the upload."""
+    """Extract text or OCR from common document, image, and text upload formats."""
     suffix = Path(filename).suffix.lower()
-    if suffix == ".txt":
+    if suffix in {".txt", ".text", ".md", ".markdown", ".csv", ".json"}:
         text = content.decode("utf-8", errors="replace")
     elif suffix == ".pdf":
         try:
             reader = PdfReader(BytesIO(content))
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
         except PdfReadError as error:
-            raise ValueError("The PDF could not be read. Try exporting it again as a text-based PDF.") from error
+            raise ValueError("The PDF could not be read. Try exporting it again.") from error
+        if not text.strip():
+            try:
+                with pymupdf.open(stream=content, filetype="pdf") as document:
+                    if len(document) > 30:
+                        raise ValueError(
+                            "This scanned PDF has more than 30 pages. Run OCR on it or split it into smaller files."
+                        )
+                    extracted_pages = []
+                    for page in document:
+                        pixmap = page.get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5), alpha=False)
+                        image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+                        extracted_pages.append(_extract_ocr_image(image, filename))
+                    text = "\n".join(extracted_pages)
+            except (pymupdf.FileDataError, pymupdf.EmptyFileError) as error:
+                raise ValueError("The PDF could not be read. Try exporting it again.") from error
     elif suffix == ".docx":
         try:
             document = Document(BytesIO(content))
         except BadZipFile as error:
             raise ValueError("The DOCX file could not be read. Try exporting it again.") from error
-        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        parts = [paragraph.text for paragraph in document.paragraphs]
+        parts.extend(
+            cell.text
+            for table in document.tables
+            for row in table.rows
+            for cell in row.cells
+        )
+        text = "\n".join(parts)
+    elif suffix == ".doc":
+        text = _extract_doc_text(content)
+    elif suffix == ".rtf":
+        text = rtf_to_text(content.decode("utf-8", errors="replace"))
+    elif suffix == ".odt":
+        try:
+            with ZipFile(BytesIO(content)) as document:
+                root = ElementTree.fromstring(document.read("content.xml"))
+        except (BadZipFile, KeyError, ElementTree.ParseError) as error:
+            raise ValueError("The ODT file could not be read. Try exporting it again.") from error
+        text = "\n".join(
+            "".join(element.itertext())
+            for element in root.iter()
+            if element.tag.rsplit("}", 1)[-1] in {"p", "h"}
+        )
+    elif suffix in {".html", ".htm"}:
+        parser = _VisibleHTMLText()
+        parser.feed(content.decode("utf-8", errors="replace"))
+        text = " ".join(parser.parts)
+    elif suffix in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}:
+        try:
+            with Image.open(BytesIO(content)) as image:
+                text = _extract_ocr_image(image, filename)
+        except UnidentifiedImageError as error:
+            raise ValueError("The image could not be opened. Try uploading a PNG or JPEG image.") from error
+    elif suffix in {".xlsx", ".xls"}:
+        try:
+            workbook = pd.read_excel(BytesIO(content), header=None, dtype=str)
+        except (ImportError, ValueError, OSError) as error:
+            raise ValueError("The spreadsheet could not be read. Try exporting it as .xlsx or PDF.") from error
+        text = "\n".join(
+            " ".join(str(value) for value in row if pd.notna(value))
+            for row in workbook.itertuples(index=False, name=None)
+        )
     else:
-        raise ValueError("Upload a PDF, DOCX, or TXT resume.")
+        raise ValueError(
+            f"The {suffix or 'unknown'} file type is not supported for text extraction. "
+            "Try PDF, DOC/DOCX, ODT, RTF, TXT, HTML, CSV, XLS/XLSX, or an image file."
+        )
 
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
-        raise ValueError(
-            "No readable text was found. Scanned PDFs need OCR before they can be analyzed."
-        )
+        raise ValueError("No readable text was found. Check that the file contains text and is not blank.")
     return text
 
 

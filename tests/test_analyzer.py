@@ -1,6 +1,8 @@
+from io import BytesIO
 import tempfile
 import unittest
 from pathlib import Path
+from zipfile import ZipFile
 
 import pandas as pd
 
@@ -71,6 +73,39 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(text, "Python developer")
         with self.assertRaisesRegex(ValueError, "No readable text"):
             extract_resume_text("empty.txt", b" \n ")
+
+    def test_rtf_resume_extraction(self):
+        text = extract_resume_text("resume.rtf", br"{\rtf1\ansi Python developer}")
+
+        self.assertIn("Python developer", text)
+
+    def test_html_extraction_ignores_script_and_styles(self):
+        text = extract_resume_text(
+            "resume.html",
+            b"<h1>Python Engineer</h1><script>ignore this</script><p>SQL skills</p>",
+        )
+
+        self.assertIn("Python Engineer", text)
+        self.assertIn("SQL skills", text)
+        self.assertNotIn("ignore this", text)
+
+    def test_odt_resume_extraction(self):
+        odt = BytesIO()
+        with ZipFile(odt, "w") as archive:
+            archive.writestr(
+                "content.xml",
+                '<document xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">'
+                "<text:p>Python Developer</text:p><text:p>SQL analyst</text:p></document>",
+            )
+
+        text = extract_resume_text("resume.odt", odt.getvalue())
+
+        self.assertIn("Python Developer", text)
+        self.assertIn("SQL analyst", text)
+
+    def test_unsupported_format_has_actionable_error(self):
+        with self.assertRaisesRegex(ValueError, "file type is not supported"):
+            extract_resume_text("resume.pages", b"binary document")
 
     def test_invalid_docx_is_reported_as_a_readable_error(self):
         with self.assertRaisesRegex(ValueError, "DOCX file could not be read"):

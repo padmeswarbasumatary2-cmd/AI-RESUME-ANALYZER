@@ -298,12 +298,16 @@ with analyze_tab:
         with upload_column:
             st.markdown("#### 1. Add your resume")
             uploaded_resume = st.file_uploader(
-                "Choose a file",
-                type=["pdf", "docx", "txt"],
+                "Choose any file",
                 max_upload_size=20,
-                help="Text-based PDFs work best. Scanned image-only PDFs need OCR first.",
+                help=(
+                    "PDF, DOC/DOCX, ODT, RTF, text, HTML, spreadsheets, or images. "
+                    "Scanned documents and image resumes are analyzed with OCR."
+                ),
             )
-            st.caption("PDF, DOCX, or TXT · up to 20 MB")
+            st.caption(
+                "PDF · Word · OpenDocument · RTF · text · HTML · spreadsheets · images · up to 20 MB"
+            )
         with job_column:
             st.markdown("#### 2. Add a target role")
             job_description = st.text_area(
@@ -316,7 +320,7 @@ with analyze_tab:
 
     if submitted:
         if uploaded_resume is None:
-            st.warning("Upload a PDF, DOCX, or TXT resume to continue.")
+            st.warning("Upload a resume file to continue.")
         else:
             contents = uploaded_resume.getvalue()
             if len(contents) > MAX_RESUME_BYTES:
