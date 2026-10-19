@@ -13,3 +13,8 @@ archive/
 Resume/
 data/*
 !data/Resume.csv
+!data/jillani_resume_dataset.csv
+!data/jithin_gpt_dataset.csv
+!data/noor_clean_resume_data.csv
+!data/wahib_resume_data.csv.gz
+!data/hiring_outcomes_summary.json

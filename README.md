@@ -1,6 +1,6 @@
 # ResumeLens AI
 
-A Streamlit resume analyzer trained on the labeled CSV bundled in `data/Resume.csv`.
+A Streamlit resume analyzer trained on the labeled CSV datasets bundled in `data/`.
 It predicts likely job categories and compares an uploaded resume with a job
 description.
 
@@ -15,22 +15,34 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The model trains from the included `data/Resume.csv` automatically when the app
-starts. It expects the `Resume_str` and `Category` columns.
+The model automatically loads bundled datasets when the app starts. It recognizes
+`Resume_str`, `Resume`, or `Feature` as resume text columns, and `Category` or
+`Label` as category columns. Comma-separated multi-category `Label` values are
+expanded into individual category examples. The large Wahib dataset is bundled as
+gzip-compressed CSV.
+
+The five active CSV sources are `Resume.csv`, `jillani_resume_dataset.csv`,
+`jithin_gpt_dataset.csv`, `noor_clean_resume_data.csv`, and `wahib_resume_data.csv.gz`.
+The separate 200,000-record structured candidate dataset is used to provide
+aggregate hiring-rate charts from `data/hiring_outcomes_summary.json`; its
+candidate-level rows are not included in the app. The app does not use that dataset
+to predict an individual's hiring outcome because held-out evaluation found no
+useful predictive signal.
 
 ## Deploy on Streamlit Community Cloud
 
-1. Push this project to GitHub. This setup includes `data/Resume.csv` in the
+1. Push this project to GitHub. The bundled training datasets are included in the
    repository so the app no longer needs a training-CSV upload.
 2. In Streamlit Community Cloud, create an app from that repository, select
    `app.py` as the main file, and deploy.
 3. The app trains automatically from the bundled CSV. Upload only the individual
    PDF, TXT, or DOCX resume that you want to analyze.
 
-**Privacy warning:** the raw training CSV contains real resumes and is committed
-to this public GitHub repository. Anyone may download it. The source resume PDF
-corpus is not included. Uploaded resumes are processed by Streamlit Cloud when the
-hosted app is used.
+**Privacy warning:** the bundled training datasets contain resume information and
+are committed to this public GitHub repository. Anyone may download them. The
+Snehaan Bhawal CSV supplied for this update is byte-identical to the already
+bundled `data/Resume.csv`, so it is not stored a second time. Uploaded resumes are
+processed by Streamlit Cloud when the hosted app is used.
 
 ## What it does
 

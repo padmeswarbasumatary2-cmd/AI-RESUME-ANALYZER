@@ -5,8 +5,10 @@ from __future__ import annotations
 import re
 import subprocess
 import tempfile
+from collections.abc import Sequence
 from io import BytesIO
 from pathlib import Path
+from typing import TypedDict
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
 
@@ -91,30 +93,173 @@ SKILL_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
+class HiringOutcomeGroup(TypedDict):
+    group: str
+    candidates: int
+    hired: int
+    hiring_rate: float
+
+
+class HiringDatasetInsights(TypedDict):
+    candidate_count: int
+    hired_count: int
+    not_hired_count: int
+    hiring_rate: float
+    by_education: list[HiringOutcomeGroup]
+    by_company_type: list[HiringOutcomeGroup]
+    by_university_tier: list[HiringOutcomeGroup]
+
+
+def summarize_hiring_outcomes(data: pd.DataFrame) -> HiringDatasetInsights:
+    """Summarize binary hiring outcomes without exposing candidate-level records."""
+    group_columns = ("education_level", "company_type", "university_tier")
+    required_columns = {"hired", *group_columns}
+    missing_columns = required_columns.difference(data.columns)
+    if missing_columns:
+        raise ValueError(
+            "Hiring dataset is missing required columns: " + ", ".join(sorted(missing_columns))
+        )
+    if data.empty:
+        raise ValueError("Hiring dataset contains no candidate records.")
+
+    summary_data = data.loc[:, ["hired", *group_columns]].copy()
+    summary_data["hired"] = pd.to_numeric(summary_data["hired"], errors="coerce")
+    if summary_data.isna().any().any():
+        raise ValueError("Hiring dataset contains missing or invalid outcome/group values.")
+    if not summary_data["hired"].isin([0, 1]).all():
+        raise ValueError("Hiring dataset's hired column must contain only 0 and 1.")
+
+    hired_count = int(summary_data["hired"].sum())
+
+    def summarize_group(column: str) -> list[HiringOutcomeGroup]:
+        grouped = (
+            summary_data.groupby(column, sort=True, observed=True)["hired"]
+            .agg(candidates="size", hired="sum")
+            .reset_index()
+        )
+        return [
+            {
+                "group": str(row[column]),
+                "candidates": int(row["candidates"]),
+                "hired": int(row["hired"]),
+                "hiring_rate": float(row["hired"] / row["candidates"]),
+            }
+            for _, row in grouped.iterrows()
+        ]
+
+    return {
+        "candidate_count": len(summary_data),
+        "hired_count": hired_count,
+        "not_hired_count": len(summary_data) - hired_count,
+        "hiring_rate": float(hired_count / len(summary_data)),
+        "by_education": summarize_group("education_level"),
+        "by_company_type": summarize_group("company_type"),
+        "by_university_tier": summarize_group("university_tier"),
+    }
+
+
+def _normalize_csv_paths(csv_path: str | Path | Sequence[str | Path] | None) -> list[str | Path]:
+    """Return a flat list of CSV sources from a path or a collection of paths."""
+    if csv_path is None:
+        return []
+    if isinstance(csv_path, (str, Path)):
+        return [csv_path]
+    return list(csv_path)
+
+
 def load_training_data(
-    csv_path: str | Path | None = None,
+    csv_path: str | Path | Sequence[str | Path] | None = None,
     pdf_root: str | Path | None = None,
     csv_bytes: bytes | None = None,
 ) -> tuple[pd.DataFrame, dict[str, int]]:
     """Load labeled CSV resumes and, when available, resumes in category PDF folders."""
+    csv_frames: list[pd.DataFrame] = []
+    csv_sources_loaded = 0
+    csv_sources_skipped = 0
+    csv_duplicates_removed = 0
+
     if csv_bytes is not None:
-        csv_source = BytesIO(csv_bytes)
-    elif csv_path is not None:
-        csv_file = Path(csv_path).expanduser()
-        if not csv_file.is_file():
-            raise FileNotFoundError(f"Resume CSV not found: {csv_file}")
-        csv_source = csv_file
+        csv_sources = [BytesIO(csv_bytes)]
     else:
+        csv_sources = []
+        for csv_entry in _normalize_csv_paths(csv_path):
+            csv_file = Path(csv_entry).expanduser()
+            if not csv_file.is_file():
+                csv_sources_skipped += 1
+                continue
+            csv_sources.append(csv_file)
+
+    if not csv_sources and csv_bytes is None:
         raise ValueError("Provide a CSV path or upload a CSV file.")
 
-    csv_data = pd.read_csv(csv_source, usecols=["Resume_str", "Category"], encoding_errors="replace")
-    csv_data = csv_data.rename(columns={"Resume_str": "text"})
-    csv_data["text"] = csv_data["text"].fillna("").astype(str).str.strip()
-    csv_data["category"] = csv_data["Category"].fillna("").astype(str).str.strip()
-    csv_data = csv_data.loc[
-        csv_data["text"].ne("") & csv_data["category"].ne(""),
-        ["text", "category"],
-    ]
+    for csv_source in csv_sources:
+        try:
+            csv_header = pd.read_csv(csv_source, nrows=0, encoding_errors="replace")
+        except (OSError, ValueError, pd.errors.ParserError):
+            csv_sources_skipped += 1
+            continue
+
+        normalized_columns = {
+            str(column).strip().casefold().replace(" ", "_"): str(column)
+            for column in csv_header.columns
+        }
+        text_column = next(
+            (
+                normalized_columns[alias]
+                for alias in ("resume_str", "resume", "feature", "text", "resume_text")
+                if alias in normalized_columns
+            ),
+            None,
+        )
+        label_column = next(
+            (
+                normalized_columns[alias]
+                for alias in ("category", "label", "job_category")
+                if alias in normalized_columns
+            ),
+            None,
+        )
+        if text_column is None or label_column is None:
+            csv_sources_skipped += 1
+            continue
+
+        if isinstance(csv_source, BytesIO):
+            csv_source.seek(0)
+        try:
+            csv_data = pd.read_csv(
+                csv_source,
+                usecols=[text_column, label_column],
+                encoding_errors="replace",
+            )
+        except (OSError, ValueError, pd.errors.ParserError):
+            csv_sources_skipped += 1
+            continue
+
+        csv_subset = csv_data.rename(columns={text_column: "text", label_column: "category"})
+        csv_subset["text"] = csv_subset["text"].fillna("").astype(str).str.strip()
+        csv_subset["category"] = csv_subset["category"].fillna("").astype(str).str.strip()
+        csv_subset = csv_subset.loc[
+            csv_subset["text"].ne("") & csv_subset["category"].ne(""),
+            ["text", "category"],
+        ]
+        if label_column.casefold() == "label":
+            csv_subset["category"] = csv_subset["category"].str.split(",")
+            csv_subset = csv_subset.explode("category")
+            csv_subset["category"] = csv_subset["category"].str.strip()
+            csv_subset = csv_subset.loc[csv_subset["category"].ne("")]
+        if not csv_subset.empty:
+            csv_frames.append(csv_subset)
+            csv_sources_loaded += 1
+        else:
+            csv_sources_skipped += 1
+
+    if not csv_frames:
+        raise ValueError("No usable labeled resumes were found in the selected CSV files.")
+
+    csv_data = pd.concat(csv_frames, ignore_index=True)
+    csv_count_before_deduplication = len(csv_data)
+    csv_data = csv_data.drop_duplicates(subset=["text", "category"], ignore_index=True)
+    csv_duplicates_removed = csv_count_before_deduplication - len(csv_data)
 
     pdf_documents: list[dict[str, str]] = []
     pdf_failures = 0
@@ -139,6 +284,9 @@ def load_training_data(
         "pdf_resumes": len(pdf_data),
         "pdf_failures": pdf_failures,
         "categories": combined["category"].nunique(),
+        "csv_sources_loaded": csv_sources_loaded,
+        "csv_sources_skipped": csv_sources_skipped,
+        "csv_duplicates_removed": csv_duplicates_removed,
     }
     return combined, stats
 

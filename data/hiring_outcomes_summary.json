@@ -1,0 +1,66 @@
+{
+  "candidate_count": 200000,
+  "hired_count": 141212,
+  "not_hired_count": 58788,
+  "hiring_rate": 0.70606,
+  "by_education": [
+    {
+      "group": "Bachelors",
+      "candidates": 129827,
+      "hired": 91723,
+      "hiring_rate": 0.7065017292242753
+    },
+    {
+      "group": "Masters",
+      "candidates": 60333,
+      "hired": 42530,
+      "hiring_rate": 0.7049210216631031
+    },
+    {
+      "group": "PhD",
+      "candidates": 9840,
+      "hired": 6959,
+      "hiring_rate": 0.7072154471544716
+    }
+  ],
+  "by_company_type": [
+    {
+      "group": "MNC",
+      "candidates": 80187,
+      "hired": 56505,
+      "hiring_rate": 0.7046653447566313
+    },
+    {
+      "group": "Mid-size",
+      "candidates": 49927,
+      "hired": 35275,
+      "hiring_rate": 0.7065315360426222
+    },
+    {
+      "group": "Startup",
+      "candidates": 69886,
+      "hired": 49432,
+      "hiring_rate": 0.7073233551784335
+    }
+  ],
+  "by_university_tier": [
+    {
+      "group": "Tier 1",
+      "candidates": 59998,
+      "hired": 42385,
+      "hiring_rate": 0.7064402146738225
+    },
+    {
+      "group": "Tier 2",
+      "candidates": 80182,
+      "hired": 56634,
+      "hiring_rate": 0.7063181262627523
+    },
+    {
+      "group": "Tier 3",
+      "candidates": 59820,
+      "hired": 42193,
+      "hiring_rate": 0.7053326646606486
+    }
+  ]
+}

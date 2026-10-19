@@ -1,15 +1,31 @@
 from __future__ import annotations
 
 import html
+import json
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-from analyzer import analyze_resume, extract_resume_text, load_training_data, train_classifier
+from analyzer import (
+    HiringDatasetInsights,
+    analyze_resume,
+    extract_resume_text,
+    load_training_data,
+    train_classifier,
+)
 
 
-TRAINING_CSV_PATH = Path(__file__).resolve().parent / "data" / "Resume.csv"
+DATASET_DIR = Path(__file__).resolve().parent / "data"
+HIRING_INSIGHTS_PATH = DATASET_DIR / "hiring_outcomes_summary.json"
+TRAINING_CSV_PATHS = [
+    DATASET_DIR / "Resume.csv",
+    DATASET_DIR / "jillani_resume_dataset.csv",
+    DATASET_DIR / "jithin_gpt_dataset.csv",
+    DATASET_DIR / "noor_clean_resume_data.csv",
+    DATASET_DIR / "wahib_resume_data.csv.gz",
+]
+TRAINING_CSV_PATHS = [path for path in TRAINING_CSV_PATHS if path.is_file()]
 MAX_RESUME_BYTES = 20 * 1024 * 1024
 
 st.set_page_config(
@@ -193,9 +209,16 @@ st.markdown(
 
 @st.cache_resource(show_spinner=False)
 def load_model():
-    training_data, data_stats = load_training_data(TRAINING_CSV_PATH)
+    training_data, data_stats = load_training_data(TRAINING_CSV_PATHS)
     model = train_classifier(training_data)
     return model, data_stats
+
+
+@st.cache_data(show_spinner=False)
+def load_hiring_insights() -> HiringDatasetInsights:
+    """Load the privacy-preserving aggregate snapshot of the 200k dataset."""
+    with HIRING_INSIGHTS_PATH.open(encoding="utf-8") as summary_file:
+        return json.load(summary_file)
 
 
 st.markdown(
@@ -212,8 +235,8 @@ st.markdown(
 with st.sidebar:
     st.markdown("## Training dataset")
     st.caption(
-        "The labeled resume dataset is bundled with this app. You do not need to upload it. "
-        "The raw CSV is stored in the public GitHub repository."
+        "The bundled training datasets contain resume information and are visible in the "
+        "public GitHub repository. The app loads them automatically."
     )
     st.markdown("---")
     st.markdown("**Next: analyze a resume**")
@@ -221,8 +244,8 @@ with st.sidebar:
         "Open the Analyze a resume tab in the main panel to upload a PDF, TXT, or DOCX resume."
     )
 
-if not TRAINING_CSV_PATH.is_file():
-    st.error(f"The bundled training dataset is missing: {TRAINING_CSV_PATH.name}")
+if not TRAINING_CSV_PATHS:
+    st.error("No bundled training dataset was found in the app data folder.")
     st.info("Re-deploy the app from GitHub so the bundled dataset is included.")
     st.stop()
 
@@ -231,7 +254,10 @@ try:
         model, data_stats = load_model()
 except (OSError, ValueError, pd.errors.ParserError) as error:
     st.error(f"Could not load the bundled resume dataset: {error}")
-    st.info("The bundled CSV must include Resume_str and Category columns.")
+    st.info(
+        "The bundled CSVs must include resume text (Resume_str, Resume, or Feature) "
+        "and a category label (Category or Label)."
+    )
     st.stop()
 
 st.markdown(
@@ -239,7 +265,9 @@ st.markdown(
     <div class="dataset-strip">
       <span><span class="dataset-dot"></span><strong>Model ready</strong></span>
       <span>·</span>
-      <span><strong>{data_stats['csv_resumes']:,}</strong> CSV resumes</span>
+      <span><strong>{data_stats['csv_sources_loaded']}</strong> CSV datasets</span>
+      <span>·</span>
+      <span><strong>{data_stats['csv_resumes']:,}</strong> labeled examples</span>
       <span>·</span>
       <span><strong>{data_stats['pdf_resumes']:,}</strong> PDF resumes</span>
       <span>·</span>
@@ -254,7 +282,9 @@ if data_stats["pdf_failures"]:
         "The classifier trained on the remaining readable data."
     )
 
-analyze_tab, dataset_tab = st.tabs(["Analyze a resume", "About the dataset"])
+analyze_tab, dataset_tab, hiring_tab = st.tabs(
+    ["Analyze a resume", "About the dataset", "200k dataset insights"]
+)
 with analyze_tab:
     st.markdown('<h3 class="section-title">Start with your resume</h3>', unsafe_allow_html=True)
     st.caption("Upload a resume to explore likely career paths. Add a job description for a focused match.")
@@ -415,3 +445,56 @@ with dataset_tab:
         "training CSV is publicly available in the GitHub repository; uploaded resumes are processed "
         "by the Streamlit-hosted app. Results depend on the coverage and quality of the training data."
     )
+
+with hiring_tab:
+    st.markdown("### Hiring dataset overview")
+    st.write(
+        "This section summarizes the separate 200,000-record dataset. It contains structured "
+        "candidate metrics and historical `hired` labels, not resume text or job categories."
+    )
+    if not HIRING_INSIGHTS_PATH.is_file():
+        st.error(f"The hiring dataset summary is missing: {HIRING_INSIGHTS_PATH.name}")
+    else:
+        try:
+            hiring_insights = load_hiring_insights()
+        except (OSError, json.JSONDecodeError) as error:
+            st.error(f"Could not load the hiring dataset summary: {error}")
+        else:
+            hiring_metrics = st.columns(3)
+            hiring_metrics[0].metric(
+                "Candidate records",
+                f"{hiring_insights['candidate_count']:,}",
+            )
+            hiring_metrics[1].metric(
+                "Historical hired",
+                f"{hiring_insights['hired_count']:,}",
+            )
+            hiring_metrics[2].metric(
+                "Dataset hired rate",
+                f"{hiring_insights['hiring_rate']:.1%}",
+            )
+
+            chart_columns = st.columns(2)
+            for column, title, key in (
+                (chart_columns[0], "Hiring rate by education", "by_education"),
+                (chart_columns[1], "Hiring rate by company type", "by_company_type"),
+            ):
+                chart_data = pd.DataFrame(hiring_insights[key]).set_index("group")
+                chart_data["Hired rate (%)"] = chart_data["hiring_rate"] * 100
+                column.markdown(f"**{title}**")
+                column.bar_chart(chart_data[["Hired rate (%)"]])
+                column.dataframe(
+                    chart_data[["candidates", "hired"]],
+                    width="stretch",
+                )
+
+            tier_data = pd.DataFrame(hiring_insights["by_university_tier"]).set_index("group")
+            tier_data["Hired rate (%)"] = tier_data["hiring_rate"] * 100
+            st.markdown("**Hiring rate by university tier**")
+            st.bar_chart(tier_data[["Hired rate (%)"]])
+            st.caption(
+                "These are descriptive dataset averages, not individual predictions or hiring "
+                "recommendations. A held-out test found no useful candidate-level signal in the "
+                "available features, so the app does not score people. Age and candidate IDs are "
+                "not included in this summary."
+            )
