@@ -306,8 +306,12 @@ with analyze_tab:
             st.markdown("#### 2. Add a target role")
             job_description = st.text_area(
                 "Job description (optional)",
+                value=(
+                    "Data Analyst\n"
+                    "Analyze datasets, build dashboards, and communicate findings. "
+                    "Requires SQL, Python, Excel, Tableau, and strong communication skills."
+                ),
                 height=175,
-                placeholder="Paste the role requirements here to see matching skills and useful keywords.",
                 label_visibility="collapsed",
             )
         submitted = st.form_submit_button("Analyze resume", type="primary", use_container_width=True)
