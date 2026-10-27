@@ -71,6 +71,30 @@ class AnalyzerTests(unittest.TestCase):
         self.assertGreaterEqual(result["alignment"], 0)
         self.assertLessEqual(result["alignment"], 100)
 
+    def test_classifier_caps_each_category_without_dropping_categories(self):
+        training_data = pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "text": [f"Python SQL software project {index}" for index in range(510)],
+                        "category": ["TECH"] * 510,
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "text": ["patient care clinical nursing"] * 3,
+                        "category": ["HEALTHCARE"] * 3,
+                    }
+                ),
+            ],
+            ignore_index=True,
+        )
+
+        model = train_classifier(training_data)
+
+        self.assertEqual(model.training_example_count_, 503)
+        self.assertEqual(set(model.named_steps["classifier"].classes_), {"HEALTHCARE", "TECH"})
+
     def test_txt_resume_extraction_and_empty_document_error(self):
         text = extract_resume_text("resume.txt", b"  Python   developer ")
 

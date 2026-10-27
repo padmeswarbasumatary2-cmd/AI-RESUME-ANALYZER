@@ -23,6 +23,8 @@ gzip-compressed CSV.
 
 The five active CSV sources are `Resume.csv`, `jillani_resume_dataset.csv`,
 `jithin_gpt_dataset.csv`, `noor_clean_resume_data.csv`, and `wahib_resume_data.csv.gz`.
+For faster, more predictable startup on Streamlit Community Cloud, the classifier
+trains on at most 500 examples per category while retaining all categories.
 The separate 200,000-record structured candidate dataset is used to provide
 aggregate hiring-rate charts from `data/hiring_outcomes_summary.json`; its
 candidate-level rows are not included in the app. The app does not use that dataset

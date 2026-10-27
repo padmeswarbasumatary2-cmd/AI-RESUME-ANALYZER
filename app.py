@@ -211,6 +211,7 @@ st.markdown(
 def load_model():
     training_data, data_stats = load_training_data(TRAINING_CSV_PATHS)
     model = train_classifier(training_data)
+    data_stats["training_examples"] = model.training_example_count_
     return model, data_stats
 
 
@@ -268,6 +269,8 @@ st.markdown(
       <span><strong>{data_stats['csv_sources_loaded']}</strong> CSV datasets</span>
       <span>·</span>
       <span><strong>{data_stats['csv_resumes']:,}</strong> labeled examples</span>
+      <span>·</span>
+      <span><strong>{data_stats['training_examples']:,}</strong> balanced examples used to train</span>
       <span>·</span>
       <span><strong>{data_stats['pdf_resumes']:,}</strong> PDF resumes</span>
       <span>·</span>
@@ -438,7 +441,8 @@ with dataset_tab:
     st.markdown("### What the analyzer learns from")
     st.write(
         "The model trains on labeled `Resume_str` text from the CSV bundled with this app. "
-        "It uses TF-IDF text features and logistic regression to rank the job categories in the dataset."
+        "It uses TF-IDF text features and logistic regression to rank the job categories in the dataset. "
+        "To keep startup resource usage bounded, training uses at most 500 examples per category."
     )
     stats_columns = st.columns(3)
     stats_columns[0].metric("CSV resumes", f"{data_stats['csv_resumes']:,}")

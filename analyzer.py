@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import re
 import subprocess
 import tempfile
+from collections import Counter
 from collections.abc import Sequence
 from io import BytesIO
 from pathlib import Path
@@ -12,6 +14,7 @@ from typing import TypedDict
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
 
+import numpy as np
 import pandas as pd
 from docx import Document
 from html.parser import HTMLParser
@@ -20,11 +23,18 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 import pymupdf
 import pytesseract
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import SGDClassifier
-from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.pipeline import Pipeline
 from striprtf.striprtf import rtf_to_text
+
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.linear_model import SGDClassifier
+    from sklearn.metrics.pairwise import cosine_similarity
+    from sklearn.pipeline import Pipeline
+except ImportError:  # pragma: no cover - runtime fallback for environments without the ML stack.
+    TfidfVectorizer = None  # type: ignore[assignment]
+    SGDClassifier = None  # type: ignore[assignment]
+    cosine_similarity = None  # type: ignore[assignment]
+    Pipeline = None  # type: ignore[assignment]
 
 
 SKILL_ALIASES: dict[str, tuple[str, ...]] = {
@@ -92,6 +102,8 @@ SKILL_ALIASES: dict[str, tuple[str, ...]] = {
     "Web Development": ("web development", "html", "css", "rest api"),
 }
 
+MAX_TRAINING_EXAMPLES_PER_CATEGORY = 500
+
 
 class HiringOutcomeGroup(TypedDict):
     group: str
@@ -108,6 +120,180 @@ class HiringDatasetInsights(TypedDict):
     by_education: list[HiringOutcomeGroup]
     by_company_type: list[HiringOutcomeGroup]
     by_university_tier: list[HiringOutcomeGroup]
+
+
+class _SimpleTfidfVectorizer:
+    """A lightweight TF-IDF fallback used when scikit-learn is unavailable."""
+
+    _STOP_WORDS = {
+        "a", "an", "and", "as", "at", "be", "by", "for", "from", "has", "he",
+        "in", "is", "it", "its", "of", "on", "that", "the", "to", "was", "were",
+        "with", "will", "you", "your", "we", "our", "this", "they", "them",
+        "their", "have", "had", "but", "not", "or", "if", "then", "than", "so",
+    }
+
+    def __init__(self, *, lowercase=True, strip_accents="unicode", stop_words="english",
+                 ngram_range=(1, 2), max_features=50_000, min_df=2, sublinear_tf=True):
+        self.lowercase = lowercase
+        self.strip_accents = strip_accents
+        self.stop_words = stop_words
+        self.ngram_range = ngram_range
+        self.max_features = max_features
+        self.min_df = min_df
+        self.sublinear_tf = sublinear_tf
+        self.vocabulary_: dict[str, int] = {}
+        self.idf_: list[float] = []
+        self._document_count = 0
+
+    def _normalize(self, text: str) -> list[str]:
+        value = text.casefold() if self.lowercase else text
+        terms = re.findall(r"[a-z0-9]+(?:[-/][a-z0-9]+)?", value)
+        filtered = []
+        for term in terms:
+            if self.stop_words == "english" and term in self._STOP_WORDS:
+                continue
+            filtered.append(term)
+        return filtered
+
+    def _get_ngrams(self, terms: list[str]) -> list[str]:
+        if self.ngram_range == (1, 1):
+            return terms
+        ngrams: list[str] = []
+        for start in range(len(terms)):
+            for end in range(start + 1, min(len(terms), start + self.ngram_range[1]) + 1):
+                if end - start < self.ngram_range[0]:
+                    continue
+                ngrams.append(" ".join(terms[start:end]))
+        return ngrams
+
+    def fit(self, documents: Sequence[str]) -> "_SimpleTfidfVectorizer":
+        doc_terms: list[list[str]] = []
+        document_frequency: Counter[str] = Counter()
+        for document in documents:
+            terms = self._get_ngrams(self._normalize(str(document)))
+            doc_terms.append(terms)
+            document_frequency.update(set(terms))
+            self._document_count += 1
+
+        selected_terms = [
+            term for term, count in document_frequency.items()
+            if count >= self.min_df
+        ]
+        selected_terms = sorted(selected_terms)[: self.max_features]
+        self.vocabulary_ = {term: index for index, term in enumerate(selected_terms)}
+        self.idf_ = [0.0] * len(self.vocabulary_)
+
+        for term, index in self.vocabulary_.items():
+            df = document_frequency.get(term, 0)
+            self.idf_[index] = math.log((1 + self._document_count) / (1 + df)) + 1.0
+
+        return self
+
+    def transform(self, documents: Sequence[str]) -> np.ndarray:
+        if not self.vocabulary_:
+            raise ValueError("The vectorizer has not been fitted yet.")
+
+        rows: list[list[float]] = []
+        for document in documents:
+            terms = self._get_ngrams(self._normalize(str(document)))
+            counts = Counter(terms)
+            vector = np.zeros(len(self.vocabulary_), dtype=float)
+            for term, count in counts.items():
+                index = self.vocabulary_.get(term)
+                if index is None:
+                    continue
+                tf = 1.0 + math.log(count) if self.sublinear_tf else float(count)
+                vector[index] = tf * self.idf_[index]
+            rows.append(vector)
+        return np.asarray(rows, dtype=float)
+
+    def get_feature_names_out(self) -> np.ndarray:
+        return np.asarray(list(self.vocabulary_.keys()), dtype=object)
+
+
+class _SimpleClassifier:
+    """Naive linear classifier that provides class probabilities without scikit-learn."""
+
+    def __init__(self, *, class_weight="balanced", random_state=42, n_jobs=1):
+        self.class_weight = class_weight
+        self.random_state = random_state
+        self.n_jobs = n_jobs
+        self.classes_: np.ndarray = np.array([], dtype=object)
+        self._class_vectors: dict[str, np.ndarray] = {}
+
+    def fit(self, X: np.ndarray, y: Sequence[str]) -> "_SimpleClassifier":
+        labels = list(y)
+        self.classes_ = np.asarray(sorted(set(labels)), dtype=object)
+        weights: dict[str, np.ndarray] = {label: np.zeros(X.shape[1], dtype=float) for label in self.classes_}
+        counts: dict[str, int] = {label: 0 for label in self.classes_}
+
+        for row, label in zip(X, labels):
+            counts[label] += 1
+            weights[label] += np.asarray(row, dtype=float)
+
+        if self.class_weight == "balanced":
+            for label in self.classes_:
+                class_size = max(counts[label], 1)
+                weights[label] = weights[label] / class_size
+                if class_size > 1:
+                    weights[label] *= (len(self.classes_) / class_size)
+
+        self._class_vectors = weights
+        return self
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        rows = np.asarray(X, dtype=float)
+        probabilities = []
+
+        for row in rows:
+            scores = []
+            for label in self.classes_:
+                coefficient = self._class_vectors.get(label, np.zeros(rows.shape[1], dtype=float))
+                score = float(np.dot(row, coefficient))
+                scores.append(score)
+
+            max_score = max(scores) if scores else 0.0
+            if max_score == 0:
+                raw = np.full(len(self.classes_), 1.0 / len(self.classes_), dtype=float)
+            else:
+                raw = np.exp(np.asarray(scores, dtype=float) - max_score)
+                raw = raw / raw.sum()
+            probabilities.append(raw)
+
+        return np.asarray(probabilities, dtype=float)
+
+
+class _SimplePipeline:
+    def __init__(self):
+        self.named_steps = {
+            "tfidf": _SimpleTfidfVectorizer(max_features=3_000),
+            "classifier": _SimpleClassifier(),
+        }
+
+    def fit(self, texts: Sequence[str], labels: Sequence[str]) -> "_SimplePipeline":
+        self.named_steps["tfidf"].fit(texts)
+        self.named_steps["classifier"].fit(self.named_steps["tfidf"].transform(texts), labels)
+        return self
+
+    def predict_proba(self, texts: Sequence[str]) -> np.ndarray:
+        transformed = self.named_steps["tfidf"].transform(texts)
+        return self.named_steps["classifier"].predict_proba(transformed)
+
+
+def _to_dense_matrix(matrix: object) -> np.ndarray:
+    if hasattr(matrix, "toarray"):
+        return np.asarray(matrix.toarray(), dtype=float)
+    return np.asarray(matrix, dtype=float)
+
+
+def _fallback_cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
+    left_array = np.asarray(left, dtype=float).ravel()
+    right_array = np.asarray(right, dtype=float).ravel()
+    left_norm = np.linalg.norm(left_array)
+    right_norm = np.linalg.norm(right_array)
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 0.0
+    return float(np.dot(left_array, right_array) / (left_norm * right_norm))
 
 
 def summarize_hiring_outcomes(data: pd.DataFrame) -> HiringDatasetInsights:
@@ -291,10 +477,33 @@ def load_training_data(
     return combined, stats
 
 
-def train_classifier(training_data: pd.DataFrame) -> Pipeline:
-    """Fit a TF-IDF and logistic-regression classifier on the labeled resumes."""
+def _select_training_examples(training_data: pd.DataFrame) -> pd.DataFrame:
+    """Keep the training set balanced and bounded while retaining every category."""
+    category_groups = training_data.groupby("category", sort=True, observed=True)
+    selected = [
+        group.sample(
+            n=MAX_TRAINING_EXAMPLES_PER_CATEGORY,
+            random_state=42,
+        )
+        if len(group) > MAX_TRAINING_EXAMPLES_PER_CATEGORY
+        else group
+        for _, group in category_groups
+    ]
+    return pd.concat(selected, ignore_index=True)
+
+
+def train_classifier(training_data: pd.DataFrame):
+    """Fit a bounded TF-IDF classifier on the labeled resumes."""
     if training_data.empty:
         raise ValueError("No usable labeled resumes were found in the selected datasets.")
+
+    training_data = _select_training_examples(training_data)
+
+    if TfidfVectorizer is None or SGDClassifier is None or Pipeline is None:
+        model = _SimplePipeline()
+        model.fit(training_data["text"].tolist(), training_data["category"].tolist())
+        model.training_example_count_ = len(training_data)
+        return model
 
     model = Pipeline(
         [
@@ -324,6 +533,7 @@ def train_classifier(training_data: pd.DataFrame) -> Pipeline:
         ]
     )
     model.fit(training_data["text"].tolist(), training_data["category"].tolist())
+    model.training_example_count_ = len(training_data)
     return model
 
 
@@ -509,7 +719,10 @@ def analyze_resume(
 
     resume_vector = vectorizer.transform([resume_text])
     job_vector = vectorizer.transform([job_description])
-    similarity = float(cosine_similarity(resume_vector, job_vector)[0, 0])
+    if cosine_similarity is not None:
+        similarity = float(cosine_similarity(resume_vector, job_vector)[0, 0])
+    else:
+        similarity = _fallback_cosine_similarity(resume_vector[0], job_vector[0])
 
     if job_skills:
         coverage = len(matched_skills) / len(job_skills)
@@ -519,8 +732,10 @@ def analyze_resume(
         alignment = 100 * similarity
 
     feature_names = vectorizer.get_feature_names_out()
-    job_weights = job_vector.toarray()[0]
-    resume_terms = set(feature_names[resume_vector.toarray()[0] > 0])
+    resume_dense = _to_dense_matrix(resume_vector)
+    job_dense = _to_dense_matrix(job_vector)
+    job_weights = job_dense[0]
+    resume_terms = set(feature_names[resume_dense[0] > 0])
     ranked_terms = job_weights.argsort()[::-1]
     missing_keywords: list[str] = []
     for index in ranked_terms:
